@@ -1,499 +1,458 @@
+gen::add_generator "PHP" gen_php::generate
 
-gen::add_generator PHP gen_js::generate_js
-gen::add_generator DrakonJS gen_js::generate_clean_js
-
-namespace eval gen_js {
+namespace eval gen_php {
 
 variable keywords {
-__halt_compiler abstract and array as
-break callable case catch class
-clone const continue declare default
-die do echo else elseif
-empty enddeclare endfor endforeach endif
-endswitch endwhile eval exit extends final
-finally fn for foreach function global
-goto if implements include include_once
-instanceof insteadof interface isset list
-match namespace new or print
-private protected public require require_once
-return static switch throw trait try
-unset use var while xor yield
+    if else elseif while for foreach function return break continue
+    true false null
 }
-
-variable handlers {}
-
-variable variables {}
-
-proc extract_variables { gdb diagram_id } {
-	variable variables
-	set vars [ gen::extract_variables $gdb $diagram_id  "" ]
-	if {$vars != "" } {
-		lappend variables $diagram_id
-		lappend variables $vars
-	}
-}
-
 
 proc highlight { tokens } {
-	variable keywords
-	return [ gen_cs::highlight_generic $keywords $tokens ]
+    variable keywords
+    return [ gen_cs::highlight_generic $keywords $tokens ]
 }
 
-proc shelf { primary secondary } {
-	return "$secondary = $primary;"
-}
-
-
-proc foreach_init { item_id first second } {
-	set index_var "\$_ind$item_id"
-	set keys_var "\$_keys$item_id"
-	set coll_var "\$_col$item_id"
-	set length_var "\$_len$item_id"
-	lassign [ parse_key_value $first ] key value
-	if { $key == "" } {
-		return "$index_var = 0;\n $coll_var = $second;\n $length_var = count\($coll_var\);"
-	} else {
-		return "$index_var = 0;\n $coll_var = $second;\n $keys_var = array_keys\($coll_var\); \n $length_var = count\($keys_var\);"
-	}
-}
-
-proc foreach_check { item_id first second } {
-	set index_var "\$_ind$item_id"
-	set length_var "\$_len$item_id"
-	return "$index_var < $length_var"
-}
-
-proc foreach_current { item_id first second } {
-	set index_var "\$_ind$item_id"
-	set coll_var "\$_col$item_id"
-	set keys_var "\$_keys$item_id"
-	lassign [ parse_key_value $first ] key value
-	if { $key == "" } {
-        return "$first = $coll_var\[$index_var\];"
-    } else {
-        return "$key = $keys_var\[$index_var\]; $value = $coll_var\[$key\];"
-    }
-}
-
-proc compare { variable constant } {
-    return "\$$variable === $constant"
-}
-
-proc foreach_incr { item_id first second } {
-	set index_var "\$_ind$item_id"
-	return "$index_var++;"
-}
-
-proc parse_key_value { item } {
-    set parts [ split $item "," ]
-    if { [ llength $parts ] > 1 } {
-        set key [ string trim [ lindex $parts 0 ] ]
-        set value [ string trim [ lindex $parts 1 ] ]
-    } else {
-        set value [ string trim [ lindex $parts 0 ] ]
-        set key ""
+proc generate { db gdb filename } {
+    global errorInfo
+    
+    set callbacks [ make_callbacks ]
+    
+    lassign [ gen::scan_file_description $db { header footer } ] header footer
+    
+    set diagrams [ $gdb eval {
+        select diagram_id from diagrams } ]
+        
+    foreach diagram_id $diagrams {
+        if { [ mwc::is_drakon $diagram_id ] } {
+            set append_semicolon 1
+            gen::fix_graph_for_diagram $gdb $callbacks $append_semicolon $diagram_id
+        }
     }
     
-    return [ list $key $value ]
+    set nogoto 1
+    set functions [ gen::generate_functions \
+        $db $gdb $callbacks $nogoto ]
+    
+    if { [ graph::errors_occured ] } { return }
+    
+    set hfile [ replace_extension $filename "php" ]
+    
+    set f [ open_output_file $hfile ]
+    catch {
+        print_to_file $f $functions $header $footer
+    } error_message
+    set savedInfo $errorInfo
+    
+    catch { close $f }
+    if { $error_message != "" } {
+        puts $errorInfo
+        error $error_message savedInfo
+    }
 }
 
 proc make_callbacks { } {
-	set callbacks {}
-	
-	gen::put_callback callbacks assign			gen_java::assign
-	gen::put_callback callbacks compare			gen_js::compare
-	gen::put_callback callbacks compare2		gen_js::compare
-	gen::put_callback callbacks while_start 	gen_java::while_start
-	gen::put_callback callbacks if_start		gen_java::if_start
-	gen::put_callback callbacks elseif_start	gen_java::elseif_start
-	gen::put_callback callbacks if_end			gen_java::if_end
-	gen::put_callback callbacks else_start		gen_java::else_start
-	gen::put_callback callbacks pass			gen_java::pass
-	gen::put_callback callbacks continue		gen_java::p.continue
-	
-	gen::put_callback callbacks return_none		gen_js::p.return_none
-	
-	gen::put_callback callbacks block_close		gen_java::block_close
-	gen::put_callback callbacks comment			gen_java::commentator
-	
-	gen::put_callback callbacks bad_case		gen_js::p.bad_case
-	gen::put_callback callbacks for_init		gen_js::foreach_init
-	gen::put_callback callbacks for_check		gen_js::foreach_check
-	gen::put_callback callbacks for_current		gen_js::foreach_current
-	gen::put_callback callbacks for_incr		gen_js::foreach_incr
-	gen::put_callback callbacks body			gen_js::generate_body
-	gen::put_callback callbacks signature		gen_js::extract_signature
-	gen::put_callback callbacks and				gen_java::p.and
-	gen::put_callback callbacks or				gen_java::p.or
-	gen::put_callback callbacks not				gen_java::p.not
-	gen::put_callback callbacks break			"break;"
-	gen::put_callback callbacks declare			gen_js::p.declare
-	gen::put_callback callbacks for_declare		gen_js::for_declare
-	gen::put_callback callbacks shelf		gen_js::shelf
-	
-    gen::put_callback callbacks change_state 	gen_js::change_state
-    gen::put_callback callbacks shutdown 	""
-    gen::put_callback callbacks fsm_merge   0
+    set callbacks {}
     
-	return $callbacks
+    gen::put_callback callbacks assign gen_php::assign
+    gen::put_callback callbacks compare gen_php::compare
+    gen::put_callback callbacks compare2 gen_php::compare
+    gen::put_callback callbacks while_start gen_php::while_start
+    gen::put_callback callbacks if_start gen_php::if_start
+    gen::put_callback callbacks elseif_start gen_php::elseif_start
+    gen::put_callback callbacks if_end gen_php::if_end
+    gen::put_callback callbacks else_start gen_php::else_start
+    gen::put_callback callbacks pass gen_php::pass
+    gen::put_callback callbacks return_none gen_php::return_none
+    gen::put_callback callbacks block_close gen_php::block_close
+    gen::put_callback callbacks comment gen_php::comment
+    gen::put_callback callbacks bad_case gen_php::bad_case
+    gen::put_callback callbacks for_declare gen_php::foreach_declare
+    gen::put_callback callbacks for_init gen_php::foreach_init
+    gen::put_callback callbacks for_check gen_php::foreach_check
+    gen::put_callback callbacks for_current gen_php::foreach_current
+    gen::put_callback callbacks for_incr gen_php::foreach_incr
+    gen::put_callback callbacks native_foreach gen_php::native_foreach
+    gen::put_callback callbacks and gen_php::and
+    gen::put_callback callbacks or gen_php::or
+    gen::put_callback callbacks not gen_php::not
+    gen::put_callback callbacks break "break;"
+    gen::put_callback callbacks continue "continue;"
+    gen::put_callback callbacks declare gen_php::declare
+    gen::put_callback callbacks shelf gen_php::shelf
+    
+    gen::put_callback callbacks body gen_php::generate_body
+    gen::put_callback callbacks signature gen_php::extract_signature
+    
+    return $callbacks
 }
 
-proc extract_signature { text name } {
-	set lines [ gen::separate_from_comments $text ]
-	set first_line [ lindex $lines 0 ]
-	set first [ lindex $first_line 0 ]
-	if { $first == "#comment" } {
-		return [ list {} [ gen::create_signature "comment" {} {} {} ]]
-	}
+proc assign { variable value } {
+    return "\$$variable = $value;"
+}
 
-    variable handlers
-    set is_handler [ contains $handlers $name ]
+proc compare { variable constant } {
+    return "$variable == $constant"
+}
+
+proc while_start { } {
+    return "while \(true\) \{"
+}
+
+proc if_start { } {
+    return "if \("
+}
+
+proc elseif_start { } {
+    return "\} else if \("
+}
+
+proc if_end { } {
+    return "\) \{"
+}
+
+proc else_start { } {
+    return "\} else \{"
+}
+
+proc pass { } {
+    return ""
+}
+
+proc return_none { } {
+    return "return;"
+}
+
+proc block_close { output depth } {
+    upvar 1 $output result
+    set line [ gen::make_indent $depth ]
+    append line "\}"
+    lappend result $line
+}
+
+proc comment { line } {
+    if {[regexp {^item\s+\d+$} $line]} {
+        return ""
+    }
+    return "// $line"
+}
+
+
+proc bad_case { switch_var select_icon_number } {
+    if {[ string compare -nocase $switch_var "select" ] == 0} {
+        return "throw new Exception\(\"Not expected condition.\"\);"
+    } else {
+        return "throw new Exception\(\"Not expected $switch_var\"\);"
+    }
+}
+
+variable _foreach_meta
+array set _foreach_meta {}
+
+proc foreach_declare { item_id first second } {
+    variable _foreach_meta
     
-	set parameters {}
-	if { $is_handler } {
-        lappend parameters {self {}}
-	}
-	foreach current $lines {
-        if { $is_handler } {
-            set left [ lindex $current 0 ]
-            if { $left == "private" || $left == "state machine" } {
-                continue
+    set raw [ string trim $first ]
+    if { $second ne "" } {
+        append raw " ; "
+        append raw [ string trim $second ]
+    }
+    
+    set parts {}
+    foreach p [ split $raw ";" ] {
+        set p [ string trim $p ]
+        if { $p ne "" } {
+            lappend parts $p
+        }
+    }
+    
+    if { [ llength $parts ] > 0 } {
+        set head [ lindex $parts 0 ]
+        if { [ string equal -nocase $head "foreach" ] } {
+            set parts [ lrange $parts 1 end ]
+        } elseif { [ string match -nocase "foreach *" $head ] } {
+            set head [ string trim [ string range $head 7 end ] ]
+            set parts [ linsert [ lrange $parts 1 end ] 0 $head ]
+        }
+    }
+    
+    set count [ llength $parts ]
+    if { $count == 2 } {
+        set vars_str [ string trim [ lindex $parts 0 ] ]
+        set items [ normalize_expr [ lindex $parts 1 ] ]
+        
+        set vars {}
+        foreach v [ split $vars_str "," ] {
+            set v [ string trim $v ]
+            if { $v ne "" } {
+                lappend vars [ normalize_var $v ]
             }
         }
-		lappend parameters $current
-	}
-
-	return [ list {} [ gen::create_signature procedure public $parameters "" ] ]
-}
-
-
-proc change_state { next_state machine_name returns } {
-    #item 1832
-    
-    if {$next_state == ""} {
-        #item 1836
-        set change "self.state = null;"
+        
+        if { [ llength $vars ] == 1 } {
+            set _foreach_meta($item_id) [ list mode single item [ lindex $vars 0 ] items $items ]
+        } elseif { [ llength $vars ] == 2 } {
+            set _foreach_meta($item_id) [ list mode kv key [ lindex $vars 0 ] value [ lindex $vars 1 ] items $items ]
+        } else {
+            set _foreach_meta($item_id) [ list mode none ]
+        }
+    } elseif { $count == 3 } {
+        set key [ normalize_var [ lindex $parts 0 ] ]
+        set value [ normalize_var [ lindex $parts 1 ] ]
+        set items [ normalize_expr [ lindex $parts 2 ] ]
+        set _foreach_meta($item_id) [ list mode kv key $key value $value items $items ]
     } else {
-        #item 1835
-        set change "self.state = \"${next_state}\";"
+        set _foreach_meta($item_id) [ list mode none ]
     }
     
-    if {$returns == {}} {
-		return $change
-	} else {
-		set output [lindex $returns 1]
-		return "$change\n$output"
-	}
+    return ""
 }
 
-proc p.declare { type name value } {
-	return "$name = $value;"
-}
-
-proc generate_body { gdb diagram_id start_item node_list sorted incoming } {
-	set callbacks [ make_callbacks ]
-	return [ cbody::generate_body $gdb $diagram_id $start_item $node_list \
-		$sorted $incoming $callbacks ]
-}
-
-
-proc p.return_none { } {
-	return "return null;"
-}
-
-proc p.block_close { output depth } {
-	upvar 1 $output result
-	set line [ gen::make_indent $depth ]
-	append line "\}"
-	lappend result $line
-}
-
-proc p.bad_case { switch_var select_icon_number } {
-    if {[ string compare -nocase $switch_var "\$select" ] == 0} {
-    	return "throw new(\"Not expected condition.\");"
-    } else {	
-		return "throw new(\"Unexpected switch value: \" . \$$switch_var);"
-	}
-	
-}
-
-proc for_declare { item_id first second } {
-	return ""
-}
-
-proc generate_js { db gdb filename } {
-	generate $db $gdb $filename 0
-}
-
-proc generate_clean_js { db gdb filename } {
-	generate $db $gdb $filename 1
-}
-
-
-proc generate { db gdb filename is_clean} {
-    # prepare
+proc foreach_init { item_id first second } {
+    variable _foreach_meta
     
-	variable variables
-	set variables {}    
-    
-	set callbacks [ make_callbacks ]
-	lassign [ gen::scan_file_description $db { header footer } ] header footer
-	
-	# state machines
-	
-    set machines [ sma::extract_many_machines $gdb $callbacks ]
-     
-    variable handlers
-    set handlers [ append_sm_names $gdb ]
-    set machine_ctrs [ make_machine_ctrs $gdb $machines ]
-
-    #set machine_decl [ make_machine_declares $machines ]	
-    set machine_decl {}
-	
-	# fix
-	
-    set diagrams [ $gdb eval {
-        select diagram_id from diagrams } ]
-    
-    set keys {":" "\{" "\}"}
-    
-    foreach diagram_id $diagrams {
-		if {$is_clean} {
-			extract_variables $gdb $diagram_id
-			gen::rewrite_clean $gdb $diagram_id $keys
-		}
-        gen::fix_graph_for_diagram $gdb $callbacks 1 $diagram_id
+    if { ![ info exists _foreach_meta($item_id) ] } {
+        return "while \(true\) \{"
     }
-
-    if { [ graph::errors_occured ] } { return }
     
-    # generate
+    set meta [ dict create {*}$_foreach_meta($item_id) ]
+    set mode [ dict get $meta mode ]
     
-	set use_nogoto 1
-	set functions [ gen::generate_functions $db $gdb $callbacks $use_nogoto ]
-	
-	set functions [ build_tasks $functions ]
-
-	if { [ graph::errors_occured ] } { return }
-
-    # write output
+    if { $mode eq "single" } {
+        set item [ dict get $meta item ]
+        set items [ dict get $meta items ]
+        return "foreach \($items as $item\) \{"
+    } elseif { $mode eq "kv" } {
+        set key [ dict get $meta key ]
+        set value [ dict get $meta value ]
+        set items [ dict get $meta items ]
+        # Генерируем PHP синтаксис с => для ключ-значение пар
+        return "foreach \($items as $key => $value\) \{"
+    }
     
-	set hfile [ replace_extension $filename "php" ]
-	set f [ open_output_file $hfile ]
-	catch {
-		p.print_to_file $f $functions $header $footer $machine_decl $machine_ctrs
-	} error_message
-
-	catch { close $f }
-	if { $error_message != "" } {
-		error $error_message
-	}
+    return "while \(true\) \{"
 }
 
-proc make_machine_ctrs { gdb machines } {
-    set result ""
-    foreach machine $machines {
-        set states [ dict get $machine "states"]
-        set param_names [ dict get $machine "param_names" ]
-        set messages [ dict get $machine "messages" ]
-        set name [ dict get $machine "name" ]
 
-        set ctr [make_machine_ctr $gdb $name $states $param_names $messages]
+proc foreach_check { item_id first second } {
+    variable _foreach_meta
+    
+    if { ![ info exists _foreach_meta($item_id) ] } {
+        return ""
+    }
+    
+    set meta [ dict create {*}$_foreach_meta($item_id) ]
+    set mode [ dict get $meta mode ]
+    
+    if { $mode eq "single" || $mode eq "kv" } {
+        return "false"
+    }
+    
+    return ""
+}
 
-        append result "\n$ctr\n"
+proc foreach_current { item_id first second } {
+    return ""
+}
+
+proc foreach_incr { item_id first second } {
+    return ""
+}
+
+proc native_foreach { for_var for_expr } {
+    set item [ normalize_var $for_var ]
+    set items [ normalize_expr $for_expr ]
+    return "foreach \($items as $item\) \{"
+}
+
+proc normalize_var { text } {
+    set s [ string trim $text ]
+    if { $s eq "" } {
+        error "Empty variable name"
+    }
+    if { [ string index $s 0 ] ne "\$" } {
+        set s "\$$s"
+    }
+    return $s
+}
+
+proc normalize_expr { text } {
+    set s [ string trim $text ]
+    if { $s eq "" } {
+        error "Empty expression"
+    }
+    return $s
+}
+
+proc and { left right } {
+    return "\($left\) && \($right\)"
+}
+
+proc or { left right } {
+    return "\($left\) || \($right\)"
+}
+
+proc not { operand } {
+    return "!\($operand\)"
+}
+
+proc declare { type name value } {
+    set var "\$$name"
+    if { $value == "" } {
+        return "$var;"
+    } else {
+        return "$var = $value;"
+    }
+}
+
+proc shelf { primary secondary } {
+    return "\$$secondary = \$$primary;"
+}
+
+proc generate_body { gdb diagram_id start_item node_list items incoming } {
+    set name [ $gdb onecolumn {
+        select name from diagrams where diagram_id = :diagram_id
+    } ]
+    error "Diagram $name is too complex"
+}
+
+proc drop_empty_lines { pairs } {
+    set result {}
+    foreach pair $pairs {
+        lassign $pair code comment
+        if { $code != {} } {
+            lappend result $pair
+        }
     }
     return $result
 }
 
-proc get_function { gdb name state message} {
-    set diagram_name "${name}_${state}_${message}"
-    set found [ $gdb onecolumn {
-        select count(*)
-        from diagrams
-        where name = :diagram_name
-    } ]
-    
-    if { $found == 1 } {
-        return $diagram_name
+proc get_return_type_and_arguments { pairs } {
+    if { $pairs == {} } {
+        set arguments {}
+        set returns ""
     } else {
-        return "function\(\) \{\}"
-    }
-}
-
-proc make_machine_ctr { gdb name states param_names messages } {
-    set lines {}
-    
-    if {0} {
-		foreach state $states {
-			foreach message $messages {
-				set fun [ get_function $gdb $name $state $message ]
-				lappend lines \
-				 "${name}_state_${state}.$message = $fun;"            
-			}
-			lappend lines "${name}_state_${state}.state_name = \"$state\";"
-		}
-	}
-    
-    
-    set params [ lrange $param_names 1 end ]
-    set params_str [ join $params ", " ]
-
-    lappend lines "function ${name}\(\) \{"
-
-    lappend lines \
-     "  var _self = this;"
-    lappend lines \
-     "  _self.type_name = \"$name\";"
-
-    set first [ lindex $states 0 ]
-    lappend lines "  _self.state = \"${first}\";"
-    
-    foreach message $messages {
-        lappend lines \
-         "  _self.$message = function\($params_str\) \{"
-        
-        lappend lines \
-         "    var _state_ = _self.state;"
-        set first 1
-        foreach state $states {
-
-			set call ""
-			set method [gen::make_normal_state_method $name $state $message ]
-			if {[gen::diagram_exists $gdb $method ]} {
-				set call "      return ${method}(_self, $params_str\);"
-			} else {
-				set method [gen::make_default_state_method $name $state]
-				if {[gen::diagram_exists $gdb $method ]} {
-					set call "      return ${method}(_self, $params_str\);"
-				}				
-			}
-
-			if { $call != "" } {
-				if {$first} {
-					lappend lines \
-					 "    if \(_state_ == \"$state\"\) \{"
-				} else {
-					lappend lines \
-					 "    else if \(_state_ == \"$state\"\) \{"				
-				}
-				
-				lappend lines $call				
-				
-				lappend lines \
-				 "    \}"
-				 
-				 set first 0
-			}
-		}
-        lappend lines \
-         "    return null;"
-        lappend lines \
-         "  \};"
-    }
-    
-    lappend lines \
-     "\}"
-    
-    return [ join $lines "\n" ]
-}
-
-proc make_machine_declares { machines } {
-    set lines {}
-    foreach machine $machines {
-        set states [ dict get $machine "states"]
-        set name [ dict get $machine "name" ]
-        foreach state $states {
-            lappend lines "\${name}_state_${state} = \{\};"
+        set last [ lindex $pairs end ]
+        set start [ lindex $last 0 ]
+        if { [ string match "returns *" $start ] } {
+            set arguments [ lrange $pairs 0 end-1]
+            set returns [ string range $start 8 end ]
+        } else {
+            set arguments $pairs
+            set returns ""
         }
     }
-    return [ join $lines "\n" ]
+    
+    return [ list $returns $arguments ]
 }
 
-proc append_sm_names { gdb } {
-    #item 1852
-    set ids {}
-    #item 1825
-    $gdb eval {
-    	select diagram_id, original, name
-    	from diagrams
-    	where original is not null
-    } {
-    	set sm_name $original
-    	set new_name "${sm_name}_$name"
-    	$gdb eval {
-    		update diagrams
-    		set name = :new_name
-    		where diagram_id = :diagram_id
-    	}
-    	lappend ids $new_name
-    }
-    #item 1853
-    return $ids
+proc extract_signature { text name } {
+    set pairs_raw [ gen::separate_from_comments $text ]
+    set pairs [ drop_empty_lines $pairs_raw ]
+    
+    lassign [ get_return_type_and_arguments $pairs ] returns parameters
+    
+    set type "procedure"
+    set signature [ gen::create_signature $type {} $parameters $returns ]
+    
+    set error_message ""
+    return [ list $error_message $signature ]
 }
 
-proc is_closure { name } {
-    if { [ string match "* function" $name ] } {
-        return 1
+proc print_to_file { fhandle functions header footer } {
+    set version [ version_string ]
+    puts $fhandle "<?php"
+    puts $fhandle ""
+    puts $fhandle "declare\(strict_types=1\);"
+    puts $fhandle ""
+    puts $fhandle "// Autogenerated with DRAKON Editor $version"
+    puts $fhandle ""
+    puts $fhandle $header
+    puts $fhandle ""
+    
+    foreach function $functions {
+        lassign $function diagram_id name signature body
+        puts $fhandle ""
+        set declaration [ build_declaration $name $signature ]
+        puts $fhandle $declaration
+        set lines [ gen::indent $body 1 ]
+        puts $fhandle $lines
+        puts $fhandle "\}"
     }
     
-    if { [ string match "*=function" $name ] } {
-        return 1
-    }
-    
-    return 0
-}    
+    puts $fhandle ""
+    puts $fhandle $footer
+}
 
 proc build_declaration { name signature } {
-	lassign $signature type access parameters returns
-	if { [ is_closure $name ] } {
-        set result "$name\("
-    } else {
-        set result "function $name\("
+    lassign $signature type access parameters returns
+    
+    set result "function $name\("
+    set params {}
+    foreach parameter $parameters {
+        set param_line [lindex $parameter 0]
+        
+        # Split only on the first '=' to separate declaration from default value
+        set declaration_part $param_line
+        set default_part ""
+        
+        if {[string first "=" $param_line] != -1} {
+            set eq_index [string first "=" $param_line]
+            set declaration_part [string trim [string range $param_line 0 [expr {$eq_index - 1}]]]
+            set default_part [string trim [string range $param_line $eq_index end]]
+        }
+        
+        # Now parse the declaration part (type and variable name)
+        set parts [split $declaration_part]
+        set pname ""
+        set type_part ""
+        
+        # Find the variable (starts with $ or will be prefixed with $)
+        for {set i 0} {$i < [llength $parts]} {incr i} {
+            set part [lindex $parts $i]
+            if {[string match "$*" $part] || [string match "*$*" $part]} {
+                # Found the variable
+                set pname $part
+                if {![string match "$*" $pname]} {
+                    set pname "\$$pname"
+                }
+                # Reconstruct: type(s) + variable
+                set type_part [join [lrange $parts 0 [expr {$i - 1}]]]
+                break
+            }
+        }
+        
+        # If we didn't find a variable with $, use the last part as variable
+        if {$pname eq ""} {
+            if {[llength $parts] > 0} {
+                set pname [lindex $parts end]
+                if {![string match "$*" $pname]} {
+                    set pname "\$$pname"
+                }
+                set type_part [join [lrange $parts 0 end-1]]
+            }
+        }
+        
+        # Build the final parameter string
+        set param_str ""
+        if {$type_part ne ""} {
+            append param_str "$type_part "
+        }
+        append param_str $pname
+        if {$default_part ne ""} {
+            append param_str " $default_part"
+        }
+        
+        lappend params $param_str
     }
     
-	set params [ gen::get_param_names $parameters ]
-	set params_list [ join $params ", " ]
-	append result $params_list
-	append result "\) \{"
-	return $result
-}
-
-proc p.print_to_file { fhandle functions header footer machine_decl machine_ctrs } {
-	variable variables
-	if { $header != "" } {
-		puts $fhandle $header
-	}
-	set version [ version_string ]
-	puts $fhandle \
-	    "// Autogenerated with DRAKON Editor $version"
-
-    puts $fhandle $machine_decl
-	foreach function $functions {
-		lassign $function diagram_id name signature body
-		set name [ normalize_name $name ]
-		set type [ lindex $signature 0 ]
-		if { $type != "comment" } {
-			puts $fhandle ""
-			set declaration [ build_declaration $name $signature ]
-			puts $fhandle $declaration
-			set vars [gen::print_variables $variables $diagram_id $signature ""]
-			if {$vars != "" } {
-				puts $fhandle $vars
-			}
-			set lines [ gen::indent $body 1 ]
-			puts $fhandle $lines
-			puts $fhandle "\}"
-		}
-	}
-	puts $fhandle $machine_ctrs
-	puts $fhandle ""
-	puts $fhandle $footer
+    append result [join $params ", "]
+    if { $returns ne "" } {
+        return "$result\): $returns \{"
+    } else {
+        return "$result\) \{"
+    }
 }
 
 
 
-
-
 }
-
-
